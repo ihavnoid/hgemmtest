@@ -44,11 +44,17 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
         "}": "=r"(zero_pair)
     );
 
+#pragma promote_to_registers
     int c0[MWG/MDIMC][NWG/NDIMC];
+#pragma promote_to_registers
     int c1[MWG/MDIMC][NWG/NDIMC];
+#pragma promote_to_registers
     int c2[MWG/MDIMC][NWG/NDIMC];
+#pragma promote_to_registers
     int c3[MWG/MDIMC][NWG/NDIMC];
+    #pragma unroll
     for(mb = 0; mb < MWG / MDIMC; mb += 1) {
+        #pragma unroll
         for(nb = 0; nb < NWG / NDIMC; nb += 1) {
             c0[mb][nb] = zero_pair;
             c1[mb][nb] = zero_pair;
@@ -76,20 +82,23 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
 #if SB == 1
 
 #endif
+#pragma unroll
         for(kb = 0; kb < 16 * KWG; kb += 16) {
-            for(mb = 0; mb < MWG / MDIMC * 16; mb += 16) {
-                for(nb = 0; nb < NWG / NDIMC * 16; nb += 16) {
-                    const __global half * b_agm_ = agm_ + mb;
-                    const __global half * b_bgm_ = bgm_ + nb;
+#pragma unroll
+            for(mb = 0; mb < MWG / MDIMC; mb += 1) {
+#pragma unroll
+                for(nb = 0; nb < NWG / NDIMC; nb += 1) {
+                    const __global half * b_agm_ = agm_ + mb * 16;
+                    const __global half * b_bgm_ = bgm_ + nb * 16;
 
                     const __global half * bb_agm_ = b_agm_ + kSizeM * (kb + kwg);
                     const __global half * bb_bgm_ = b_bgm_ + kSizeN * (kb + kwg);
 #ifdef USE_TC
                     int d0_, d1_, d2_, d3_;
-                    int c0_ = c0[mb/16][nb/16];
-                    int c1_ = c1[mb/16][nb/16];
-                    int c2_ = c2[mb/16][nb/16];
-                    int c3_ = c3[mb/16][nb/16];
+                    int c0_ = c0[mb][nb];
+                    int c1_ = c1[mb][nb];
+                    int c2_ = c2[mb][nb];
+                    int c3_ = c3[mb][nb];
                     asm("{\n"
                         ".reg .b32 a0, a1, a2, a3, a4, a5, a6, a7;\n"
                         ".reg .b32 b0, b1, b2, b3, b4, b5, b6, b7;\n"
@@ -101,20 +110,20 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                         "    {b0,b1,b2,b3,b4,b5,b6,b7},\n"
                         "    {%8,%9,%10,%11};\n"
                         "}": "=r"(d0_), "=r"(d1_), "=r"(d2_), "=r"(d3_) : "l"(bb_agm_), "l"(bb_bgm_), "r"(kSizeM), "r"(kSizeN), "r"(c0_), "r"(c1_), "r"(c2_), "r"(c3_));
-                    c0[mb/16][nb/16] = d0_;
-                    c1[mb/16][nb/16] = d1_;
-                    c2[mb/16][nb/16] = d2_;
-                    c3[mb/16][nb/16] = d3_;
+                    c0[mb][nb] = d0_;
+                    c1[mb][nb] = d1_;
+                    c2[mb][nb] = d2_;
+                    c3[mb][nb] = d3_;
 #else
-                   for(m = offset_m; m < 16; m += 8) {
-                       for(n = offset_n; n < 16; n += 4) {
-                           float a = 0.0f;
-                           for(k = 0; k < 16; k++) {
-                               a += vload_half(kSizeM * k + m, bb_agm_) * vload_half(kSizeN * k + n, bb_bgm_);
-                           }
-                           acc[mb/16][nb/16][m/8][n/4] += a;
-                       }
-                   }
+                    for(m = offset_m; m < 16; m += 8) {
+                        for(n = offset_n; n < 16; n += 4) {
+                            float a = 0.0f;
+                            for(k = 0; k < 16; k++) {
+                                a += vload_half(kSizeM * k + m, bb_agm_) * vload_half(kSizeN * k + n, bb_bgm_);
+                            }
+                            acc[mb][nb][m/8][n/4] += a;
+                        }
+                    }
 #endif
                 }
             }
@@ -122,7 +131,9 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
     }
 
 #ifdef USE_TC
+#pragma unroll
     for(mb = 0; mb < MWG / MDIMC; mb += 1) {
+#pragma unroll
         for(nb = 0; nb < NWG / NDIMC; nb += 1) {
             int c0_ = c0[mb][nb];
             int c1_ = c1[mb][nb];
