@@ -1,4 +1,4 @@
-// #define USE_TC
+#define USE_TC
 
 void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                   #if SA == 1
@@ -11,7 +11,6 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                   const __global half* restrict bgm,
                   __global half* restrict cgm)
 {
-#if 1
     int laneid;
     asm("mov.u32 %0, %%laneid;" : "=r"(laneid));
 
@@ -32,6 +31,8 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
     if(laneid != get_global_id(0) % 32) {
         return;
     }
+
+    int k, m, n, mb, nb, kb, kwg;
 #ifdef USE_TC
     int zero_pair;
     asm("{\n"
@@ -42,10 +43,7 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
         "mov.b32 %0, {xh,xh};\n"
         "}": "=r"(zero_pair)
     );
-#endif
 
-    int k, m, n, mb, nb, kb, kwg;
-#ifdef USE_TC
     int c0[MWG/MDIMC][NWG/NDIMC];
     int c1[MWG/MDIMC][NWG/NDIMC];
     int c2[MWG/MDIMC][NWG/NDIMC];
@@ -53,6 +51,9 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
     for(mb = 0; mb < MWG / MDIMC; mb += 1) {
         for(nb = 0; nb < NWG / NDIMC; nb += 1) {
             c0[mb][nb] = zero_pair;
+            c1[mb][nb] = zero_pair;
+            c2[mb][nb] = zero_pair;
+            c3[mb][nb] = zero_pair;
         }
     }
 #else
@@ -84,18 +85,26 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                     const __global half * bb_agm_ = b_agm_ + kSizeM * (kb + kwg);
                     const __global half * bb_bgm_ = b_bgm_ + kSizeN * (kb + kwg);
 #ifdef USE_TC
+                    int d0_, d1_, d2_, d3_;
+                    int c0_ = c0[mb/16][nb/16];
+                    int c1_ = c1[mb/16][nb/16];
+                    int c2_ = c2[mb/16][nb/16];
+                    int c3_ = c3[mb/16][nb/16];
                     asm("{\n"
                         ".reg .b32 a0, a1, a2, a3, a4, a5, a6, a7;\n"
                         ".reg .b32 b0, b1, b2, b3, b4, b5, b6, b7;\n"
-                        ".reg .b32 c0, c1, c2, c3;\n"
-                        "wmma.load.a.sync.aligned.m16n16k16.col.f16 {a0,a1,a2,a3,a4,a5,a6,a7}, [%4], %6;\n"
-                        "wmma.load.b.sync.aligned.m16n16k16.row.f16 {b0,b1,b2,b3,b4,b5,b6,b7}, [%5], %7;\n"
+                        "wmma.load.a.sync.aligned.m16n16k16.row.f16 {a0,a1,a2,a3,a4,a5,a6,a7}, [%4], %6;\n"
+                        "wmma.load.b.sync.aligned.m16n16k16.col.f16 {b0,b1,b2,b3,b4,b5,b6,b7}, [%5], %7;\n"
                         "wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16 "
                         "    {%0,%1,%2,%3},\n"
                         "    {a0,a1,a2,a3,a4,a5,a6,a7},\n"
                         "    {b0,b1,b2,b3,b4,b5,b6,b7},\n"
-                        "    {%0,%1,%2,%3};\n"
-                        "}": "+r"(c0[mb/16][nb/16]), "+r"(c1[mb/16][nb/16]), "+r"(c2[mb/16][nb/16]), "+r"(c3[mb/16][nb/16]) : "l"(bb_agm_), "l"(bb_bgm_), "r"(kSizeM), "r"(kSizeN): "memory");
+                        "    {%8,%9,%10,%11};\n"
+                        "}": "=r"(d0_), "=r"(d1_), "=r"(d2_), "=r"(d3_) : "l"(bb_agm_), "l"(bb_bgm_), "r"(kSizeM), "r"(kSizeN), "r"(c0_), "r"(c1_), "r"(c2_), "r"(c3_));
+                    c0[mb/16][nb/16] = d0_;
+                    c1[mb/16][nb/16] = d1_;
+                    c2[mb/16][nb/16] = d2_;
+                    c3[mb/16][nb/16] = d3_;
 #else
                    for(m = offset_m; m < 16; m += 8) {
                        for(n = offset_n; n < 16; n += 4) {
@@ -113,9 +122,18 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
     }
 
 #ifdef USE_TC
-    asm("{\n"
-        "wmma.store.d.sync.aligned.col.m16n16k16.f16 [%4], {%0,%1,%2,%3}, %5;"
-    "}" : : "r"(c0), "r"(c1), "r"(c2), "r"(c3), "l"(cgm_), "r"(kSizeM));
+    for(mb = 0; mb < MWG / MDIMC; mb += 1) {
+        for(nb = 0; nb < NWG / NDIMC; nb += 1) {
+            int c0_ = c0[mb][nb];
+            int c1_ = c1[mb][nb];
+            int c2_ = c2[mb][nb];
+            int c3_ = c3[mb][nb];
+            __global half * b_cgm_ = cgm_ + kSizeM * nb * 16 + mb * 16;
+            asm("{\n"
+                "wmma.store.d.sync.aligned.row.m16n16k16.f16 [%4], {%0,%1,%2,%3}, %5;"
+                "}" : : "r"(c0_), "r"(c1_), "r"(c2_), "r"(c3_), "l"(b_cgm_), "r"(kSizeM));
+        }
+    }
 #else
     for(mb = 0; mb < MWG / MDIMC; mb += 1) {
         for(nb = 0; nb < NWG / NDIMC; nb += 1) {
@@ -123,21 +141,6 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                 for(n = offset_n; n < 16; n += 4) {
                     vstore_half(acc[mb][nb][m/8][n/4], kSizeM * (nb * 16 + n) + mb * 16 + m, cgm_);
                 }
-            }
-        }
-    }
-#endif
-
-#else
-    {
-        int k, m, n;
-        for(m=0; m<kSizeM; m++) {
-            for(n=0; n<kSizeN; n++) {
-                float acc = 0.0f;
-                for(k=0; k < kSizeK; k++) {
-                    acc += vload_half(kSizeM * k + m, agm) * vload_half(kSizeN * k + n, bgm);
-                }
-                vstore_half(acc, kSizeM * n + m, cgm);
             }
         }
     }
