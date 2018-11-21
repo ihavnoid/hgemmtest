@@ -240,9 +240,9 @@ int main() {
     // Make program of the source code in the context
     cl::Kernel kernel;
 
-    int mdimc = 4;
+    int mdimc = 2;
     int ndimc = 2;
-    int mwg = 8;
+    int mwg = 4;
     int nwg = 2;
     int kwg = 2;
 
@@ -322,7 +322,7 @@ int main() {
             kernel.setArg(5, cBuffer);
 
             cl::NDRange local_sgemm = {32 * mdimc, ndimc, 1};
-            cl::NDRange size_sgemm = {32 * m / 32 * mdimc / mwg, n / 8 * ndimc / nwg, size_t(batch_size)};
+            cl::NDRange size_sgemm = {32 * m / 16 * mdimc / mwg, n / 16 * ndimc / nwg, size_t(batch_size)};
 
             queue.enqueueNDRangeKernel(kernel, cl::NullRange,
                                        size_sgemm, local_sgemm,
