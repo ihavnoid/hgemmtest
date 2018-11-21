@@ -312,15 +312,16 @@ int main() {
                                  b_size * sizeof(half_float::half), b.data());
         queue.finish();
 
-        {
+        kernel.setArg(0, m);
+        kernel.setArg(1, n);
+        kernel.setArg(2, k);
+        kernel.setArg(3, aBuffer);
+        kernel.setArg(4, bBuffer);
+        kernel.setArg(5, cBuffer);
+        auto sum_time = 0.0f;
+        auto sum_error = 0.0f;
 
-            kernel.setArg(0, m);
-            kernel.setArg(1, n);
-            kernel.setArg(2, k);
-            kernel.setArg(3, aBuffer);
-            kernel.setArg(4, bBuffer);
-            kernel.setArg(5, cBuffer);
-
+        for (int i=0; i<4; i++) {
             cl::NDRange local_sgemm = {32 * mdimc, ndimc, 1};
             cl::NDRange size_sgemm = {32 * m / 16 * mdimc / mwg, n / 16 * ndimc / nwg, size_t(batch_size)};
 
@@ -333,12 +334,14 @@ int main() {
             queue.enqueueReadBuffer(cBuffer, CL_FALSE, 0,
                                     c_size * sizeof(half_float::half), c.data());
             queue.finish();
+            auto this_error = compare_ref(c, c_ref, n, m, batch_size, n, m);
+            auto elapsed = event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -
+                        event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+            sum_time += elapsed;
+            sum_error += this_error;   
         }
-        auto this_error = compare_ref(c, c_ref, n, m, batch_size, n, m);
-        auto elapsed = event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -
-                    event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
 
-        printf("%f %f\n", (double)this_error, (double)elapsed * 1e-6);
+        printf("%f %f\n", (double)sum_error / 4, (double) sum_time * 1e-6 / 4);
     }
 
     return 0;
