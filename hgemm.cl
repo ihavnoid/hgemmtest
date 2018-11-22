@@ -1,15 +1,64 @@
+#ifndef SA
 #define SA 1
+#endif
+
+#ifndef SB
 #define SB 1
+#endif
+
+#ifndef VWM
+#define VWM 4
+#endif
+
+#ifndef VWN
+#define VWN 2
+#endif
+
+#if VWM == 1
+#define vstoreM vstore
+#define vloadM vload
+#elif VWM == 2
+#define vstoreM vstore2
+#define vloadM vload2
+#elif VWM == 4
+#define vstoreM vstore4
+#define vloadM vload4
+#elif VWM == 8
+#define vstoreM vstore8
+#define vloadM vload8
+#elif VWM == 16
+#define vstoreM vstore16
+#define vloadM vload16
+#endif
+
+#if VWN == 1
+#define vstoreN vstore
+#define vloadN vload
+#elif VWN == 2
+#define vstoreN vstore2
+#define vloadN vload2
+#elif VWN == 4
+#define vstoreN vstore4
+#define vloadN vload4
+#elif VWN == 8
+#define vstoreN vstore8
+#define vloadN vload8
+#elif VWN == 16
+#define vstoreN vstore16
+#define vloadN vload16
+#endif
 
 void GlobalToLocalA(int tid, int stride, __local short * alm, __global short * agm)
 {
     const int copy_size = KWG * MWG * 256;
     const int dest_stride = MWG * 16;
     const int num_threads = MDIMC * NDIMC * 32;
-    for(int i=tid; i < copy_size; i += num_threads) {
+
+    for(int i=tid * VWM; i < copy_size; i += num_threads * VWM) {
         int x = i % dest_stride;
         int y = i / dest_stride;
-        alm[i] = agm[y * stride + x];
+
+        vstoreM( vloadM((y * stride + x) / VWM, agm), i / VWM, alm);
     } 
 }
 
@@ -22,7 +71,7 @@ void GlobalToLocalB(int tid, int stride, __local short * blm, __global short * b
     for(int i=tid; i < copy_size; i += num_threads) {
         int x = i % dest_stride;
         int y = i / dest_stride;
-        blm[i] = bgm[y * stride + x];
+        vstoreN( vloadN((y * stride + x) / VWN, bgm), i / VWN, blm);
     } 
 }
 
