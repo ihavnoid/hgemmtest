@@ -1,5 +1,10 @@
-#define SA 1
+#ifndef SA
+#define SA 0
+#endif
+
+#ifndef SB
 #define SB 1
+#endif
 
 void GlobalToLocalA(int tid, int stride, __local short * alm, __global short * agm)
 {
@@ -26,8 +31,7 @@ void GlobalToLocalB(int tid, int stride, __local short * blm, __global short * b
     } 
 }
 
-
-// #define USE_TC
+#define USE_TC
 
 void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                   #if SA == 1
@@ -159,8 +163,16 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                     asm("{\n"
                         ".reg .b32 a0, a1, a2, a3, a4, a5, a6, a7;\n"
                         ".reg .b32 b0, b1, b2, b3, b4, b5, b6, b7;\n"
+#if SA == 1
+                        "wmma.load.a.sync.aligned.m16n16k16.shared.row.f16 {a0,a1,a2,a3,a4,a5,a6,a7}, [%4], %6;\n"
+#else
                         "wmma.load.a.sync.aligned.m16n16k16.row.f16 {a0,a1,a2,a3,a4,a5,a6,a7}, [%4], %6;\n"
+#endif
+#if SB == 1
+                        "wmma.load.b.sync.aligned.m16n16k16.shared.col.f16 {b0,b1,b2,b3,b4,b5,b6,b7}, [%5], %7;\n"
+#else
                         "wmma.load.b.sync.aligned.m16n16k16.col.f16 {b0,b1,b2,b3,b4,b5,b6,b7}, [%5], %7;\n"
+#endif
                         "wmma.mma.sync.aligned.row.col.m16n16k16.f16.f16 "
                         "    {%0,%1,%2,%3},\n"
                         "    {a0,a1,a2,a3,a4,a5,a6,a7},\n"
@@ -215,6 +227,9 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
 #endif
 }
 
+struct alm_t {short alm[KWG * MWG * 256];} __attribute__((aligned(32)));
+struct blm_t {short blm[KWG * NWG * 256];} __attribute__((aligned(32)));
+
 __kernel void HgemmBatched(const int kSizeM, const int kSizeN, const int kSizeK,
                   const __global half* restrict agm,
                   const __global half* restrict bgm,
@@ -232,18 +247,18 @@ __kernel void HgemmBatched(const int kSizeM, const int kSizeN, const int kSizeK,
 
     // Allocates workgroup-private memory (local memory)
     #if SA == 1
-      __local short alm[KWG * MWG * 256];
+      __local struct alm_t alm;
     #endif
     #if SB == 1
-      __local short blm[KWG * NWG * 256];
+      __local struct blm_t blm;
     #endif
 
     #if SA == 1 && SB == 1
-        HgemmBody(kSizeM, kSizeN, kSizeK, alm, blm, agm_, bgm_, cgm_);
+        HgemmBody(kSizeM, kSizeN, kSizeK, alm.alm, blm.blm, agm_, bgm_, cgm_);
     #elif SA == 1
-        HgemmBody(kSizeM, kSizeN, kSizeK, alm, agm_, bgm_, cgm_);
+        HgemmBody(kSizeM, kSizeN, kSizeK, alm.alm, agm_, bgm_, cgm_);
     #elif SB == 1
-        HgemmBody(kSizeM, kSizeN, kSizeK, blm, agm_, bgm_, cgm_);
+        HgemmBody(kSizeM, kSizeN, kSizeK, blm.blm, agm_, bgm_, cgm_);
     #else
         HgemmBody(kSizeM, kSizeN, kSizeK, agm_, bgm_, cgm_);
     #endif
