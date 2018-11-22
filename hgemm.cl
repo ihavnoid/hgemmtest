@@ -1,4 +1,33 @@
-#define USE_TC
+#define SA 1
+#define SB 1
+
+void GlobalToLocalA(int tid, int stride, __local short * alm, __global short * agm)
+{
+    const int copy_size = KWG * MWG * 256;
+    const int dest_stride = MWG * 16;
+    const int num_threads = MDIMC * NDIMC * 32;
+    for(int i=tid; i < copy_size; i += num_threads) {
+        int x = i % dest_stride;
+        int y = i / dest_stride;
+        alm[i] = agm[y * stride + x];
+    } 
+}
+
+
+void GlobalToLocalB(int tid, int stride, __local short * blm, __global short * bgm)
+{
+    const int copy_size = KWG * NWG * 256;
+    const int dest_stride = NWG * 16;
+    const int num_threads = MDIMC * NDIMC * 32;
+    for(int i=tid; i < copy_size; i += num_threads) {
+        int x = i % dest_stride;
+        int y = i / dest_stride;
+        blm[i] = bgm[y * stride + x];
+    } 
+}
+
+
+// #define USE_TC
 
 void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                   #if SA == 1
@@ -76,23 +105,51 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
 #endif
     for(kwg = 0; kwg < kSizeK; kwg += 16 * KWG) {
 #if SA == 1
-    
+        GlobalToLocalA(get_local_id(0) +  get_local_id(1) * 32 * MDIMC, kSizeM,
+            alm, 
+            (__global short *)(agm + get_group_id(0) * MWG * 16 + kwg * kSizeM)
+        ); 
 #endif
 
 #if SB == 1
+        GlobalToLocalB(get_local_id(0) +  get_local_id(1) * 32 * MDIMC, kSizeN,
+            blm, 
+            (__global short *)(bgm + get_group_id(1) * NWG * 16 + kwg * kSizeN)
+        ); 
 
 #endif
+
+#if SA == 1 || SB == 1
+        barrier(CLK_LOCAL_MEM_FENCE);
+#endif
+
 #pragma unroll
         for(kb = 0; kb < 16 * KWG; kb += 16) {
 #pragma unroll
             for(mb = 0; mb < MWG / MDIMC; mb += 1) {
 #pragma unroll
                 for(nb = 0; nb < NWG / NDIMC; nb += 1) {
+#if SA == 1
+                    const int block_loc_m = (get_local_id(0)/32) % MDIMC;
+                    const int agm_stride = 16 * MWG;
+                    const __local half * b_agm_ = (const __local half *)(alm + (mb + block_loc_m * (MWG/MDIMC)) * 16);
+                    const __local half * bb_agm_ = b_agm_ + agm_stride * kb;
+#else
+                    const int agm_stride = kSizeM;
                     const __global half * b_agm_ = agm_ + mb * 16;
-                    const __global half * b_bgm_ = bgm_ + nb * 16;
-
                     const __global half * bb_agm_ = b_agm_ + kSizeM * (kb + kwg);
+#endif
+
+#if SB == 1
+                    const int block_loc_n = (get_local_id(1)) % NDIMC;
+                    const int bgm_stride = 16 * NWG;
+                    const __local half * b_bgm_ = (const __local half *)(blm + (nb + block_loc_n * (NWG/NDIMC)) * 16);
+                    const __local half * bb_bgm_ = b_bgm_ + bgm_stride * kb;
+#else
+                    const int bgm_stride = kSizeN;
+                    const __global half * b_bgm_ = bgm_ + nb * 16;
                     const __global half * bb_bgm_ = b_bgm_ + kSizeN * (kb + kwg);
+#endif
 #ifdef USE_TC
                     int d0_, d1_, d2_, d3_;
                     int c0_ = c0[mb][nb];
@@ -109,7 +166,7 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                         "    {a0,a1,a2,a3,a4,a5,a6,a7},\n"
                         "    {b0,b1,b2,b3,b4,b5,b6,b7},\n"
                         "    {%8,%9,%10,%11};\n"
-                        "}": "=r"(d0_), "=r"(d1_), "=r"(d2_), "=r"(d3_) : "l"(bb_agm_), "l"(bb_bgm_), "r"(kSizeM), "r"(kSizeN), "r"(c0_), "r"(c1_), "r"(c2_), "r"(c3_));
+                        "}": "=r"(d0_), "=r"(d1_), "=r"(d2_), "=r"(d3_) : "l"(bb_agm_), "l"(bb_bgm_), "r"(agm_stride), "r"(bgm_stride), "r"(c0_), "r"(c1_), "r"(c2_), "r"(c3_));
                     c0[mb][nb] = d0_;
                     c1[mb][nb] = d1_;
                     c2[mb][nb] = d2_;
@@ -119,7 +176,7 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                         for(n = offset_n; n < 16; n += 4) {
                             float a = 0.0f;
                             for(k = 0; k < 16; k++) {
-                                a += vload_half(kSizeM * k + m, bb_agm_) * vload_half(kSizeN * k + n, bb_bgm_);
+                                a += vload_half(agm_stride * k + m, bb_agm_) * vload_half(bgm_stride * k + n, bb_bgm_);
                             }
                             acc[mb][nb][m/8][n/4] += a;
                         }
