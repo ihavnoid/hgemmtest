@@ -240,7 +240,9 @@ int main() {
     // Make program of the source code in the context
     cl::Kernel kernel;
 
-        
+    std::string max_option;
+    float min_time = 100000.0;
+    float min_time_error = 0.0; 
 
     auto test = [&](int mdimc, int ndimc, int mwg, int nwg, int kwg, int sa, int sb, int vwm, int vwn)
     {
@@ -345,7 +347,13 @@ int main() {
             sum_time = 0.0f;
         }
 
-        printf("%s %f %f\n", tune_args.c_str(), (double)sum_error / 4, (double) sum_time * 1e-6 / 4);
+        auto time = sum_time * 1e-6 / 4;
+        printf("%s %f %f\n", tune_args.c_str(), (double)sum_error / 4, (double) time);
+        if(min_time > time) {
+            min_time = time;
+            min_time_error = sum_error / 4;
+            max_option = tune_args;
+        }
     };
 
     for ( int mdimc = 1; mdimc <= 4; mdimc *= 2) {
@@ -373,6 +381,7 @@ int main() {
             }
         }
     }
+    printf("\n\nWinner : %s %f %f\n", max_option.c_str(), (double)min_time_error, (double) min_time);
 
     return 0;
 }
