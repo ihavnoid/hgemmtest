@@ -258,16 +258,7 @@ int main() {
         tune_args += " -DVWN="+std::to_string(vwn);
     
         args += tune_args;
-        try {
-            m_program = cl::Program(m_context, sourceCode);
-            m_program.build(args.c_str());
-            kernel = cl::Kernel(m_program, "HgemmBatched");
-        } catch (const cl::Error &e) {
-            printf("sourceCode : %s\n", sourceCode.c_str());
-            printf("Error building kernels: %s\n",
-                     m_program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(m_device).c_str());
-            throw std::runtime_error("Error getting OpenCL kernels.");
-        }
+
         int batch_size = 36;
         int m = 256;
         int n = 32;
@@ -316,16 +307,20 @@ int main() {
                                  b_size * sizeof(half_float::half), b.data());
         queue.finish();
 
-        kernel.setArg(0, m);
-        kernel.setArg(1, n);
-        kernel.setArg(2, k);
-        kernel.setArg(3, aBuffer);
-        kernel.setArg(4, bBuffer);
-        kernel.setArg(5, cBuffer);
         auto sum_time = 0.0f;
         auto sum_error = 0.0f;
 
         try {
+            m_program = cl::Program(m_context, sourceCode);
+            m_program.build(args.c_str());
+
+            kernel = cl::Kernel(m_program, "HgemmBatched");
+            kernel.setArg(0, m);
+            kernel.setArg(1, n);
+            kernel.setArg(2, k);
+            kernel.setArg(3, aBuffer);
+            kernel.setArg(4, bBuffer);
+            kernel.setArg(5, cBuffer);
             for (int i=0; i<4; i++) {
                 cl::NDRange local_sgemm = {32 * mdimc, ndimc, 1};
                 cl::NDRange size_sgemm = {32 * m / 16 * mdimc / mwg, n / 16 * ndimc / nwg, size_t(batch_size)};
