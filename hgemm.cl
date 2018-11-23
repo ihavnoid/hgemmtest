@@ -75,7 +75,7 @@ void GlobalToLocalB(int tid, int stride, __local short * blm, __global short * b
     } 
 }
 
-// #define USE_TC
+#define USE_TC
 
 void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
                   #if SA == 1
