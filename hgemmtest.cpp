@@ -324,7 +324,7 @@ int main() {
             kernel.setArg(4, bBuffer);
             kernel.setArg(5, cBuffer);
             for (int i=0; i<4; i++) {
-                cl::NDRange local_sgemm = {32 * mdimc, ndimc, 1};
+                cl::NDRange local_sgemm = {32 * mdimc / 16, ndimc / 16, 1};
                 cl::NDRange size_sgemm = {32 * m / 16 * mdimc / mwg, n / 16 * ndimc / nwg, size_t(batch_size)};
     
                 queue.enqueueNDRangeKernel(kernel, cl::NullRange,
@@ -356,13 +356,13 @@ int main() {
         }
     };
 
-    for ( int mdimc = 1; mdimc <= 4; mdimc *= 2) {
-        for (int ndimc = 1; ndimc <= 4; ndimc *= 2) {
-            for ( int mwg = 1; mwg <= 4; mwg *= 2) {
-                for ( int nwg = 1; nwg <= 2; nwg *= 2) {
+    for ( int mdimc = 16; mdimc <= 64; mdimc *= 2) {
+        for (int ndimc = 16; ndimc <= 32; ndimc *= 2) {
+            for ( int mwg = 16; mwg <= 64; mwg *= 2) {
+                for ( int nwg = 16; nwg <= 32; nwg *= 2) {
                     if(mwg < mdimc) continue;
                     if(nwg < ndimc) continue;
-                    for (int kwg = 1; kwg < 16; kwg *= 2) {
+                    for (int kwg = 16; kwg < 64; kwg *= 2) {
                         for(int sa = 0; sa < 2; sa++) {
                             for(int sb = 0; sb < 2; sb++) {
                                 for(int vwm = 1; vwm <= 8; vwm *= 2) {
