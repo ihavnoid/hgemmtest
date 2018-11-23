@@ -240,30 +240,34 @@ int main() {
     // Make program of the source code in the context
     cl::Kernel kernel;
 
-    int mdimc = 2;
-    int ndimc = 2;
-    int mwg = 4;
-    int nwg = 2;
-    int kwg = 2;
+        
 
-    try {
-        m_cl_args += " -DMDIMC="+std::to_string(mdimc);
-        m_cl_args += " -DNDIMC="+std::to_string(ndimc);
-        m_cl_args += " -DMWG="+std::to_string(mwg);
-        m_cl_args += " -DNWG="+std::to_string(nwg);
-        m_cl_args += " -DKWG="+std::to_string(kwg);
-
-        m_program = cl::Program(m_context, sourceCode);
-        m_program.build(m_cl_args.c_str());
-        kernel = cl::Kernel(m_program, "HgemmBatched");
-    } catch (const cl::Error &e) {
-        printf("sourceCode : %s\n", sourceCode.c_str());
-        printf("Error building kernels: %s\n",
-                 m_program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(m_device).c_str());
-        throw std::runtime_error("Error getting OpenCL kernels.");
-    }
-
+    auto test = [&](int mdimc, int ndimc, int mwg, int nwg, int kwg, int sa, int sb, int vwm, int vwn)
     {
+
+        auto args = m_cl_args;
+        auto tune_args = std::string();
+        tune_args += " -DMDIMC="+std::to_string(mdimc);
+        tune_args += " -DNDIMC="+std::to_string(ndimc);
+        tune_args += " -DMWG="+std::to_string(mwg);
+        tune_args += " -DNWG="+std::to_string(nwg);
+        tune_args += " -DKWG="+std::to_string(kwg);
+        tune_args += " -DSA="+std::to_string(sa);
+        tune_args += " -DSB="+std::to_string(sb);
+        tune_args += " -DVWM="+std::to_string(vwm);
+        tune_args += " -DVWN="+std::to_string(vwn);
+    
+        args += tune_args;
+        try {
+            m_program = cl::Program(m_context, sourceCode);
+            m_program.build(args.c_str());
+            kernel = cl::Kernel(m_program, "HgemmBatched");
+        } catch (const cl::Error &e) {
+            printf("sourceCode : %s\n", sourceCode.c_str());
+            printf("Error building kernels: %s\n",
+                     m_program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(m_device).c_str());
+            throw std::runtime_error("Error getting OpenCL kernels.");
+        }
         int batch_size = 36;
         int m = 256;
         int n = 32;
@@ -321,27 +325,58 @@ int main() {
         auto sum_time = 0.0f;
         auto sum_error = 0.0f;
 
-        for (int i=0; i<4; i++) {
-            cl::NDRange local_sgemm = {32 * mdimc, ndimc, 1};
-            cl::NDRange size_sgemm = {32 * m / 16 * mdimc / mwg, n / 16 * ndimc / nwg, size_t(batch_size)};
-
-            queue.enqueueNDRangeKernel(kernel, cl::NullRange,
-                                       size_sgemm, local_sgemm,
-                                       nullptr, &event);
-            queue.finish();
-            event.wait();
-
-            queue.enqueueReadBuffer(cBuffer, CL_FALSE, 0,
-                                    c_size * sizeof(half_float::half), c.data());
-            queue.finish();
-            auto this_error = compare_ref(c, c_ref, n, m, batch_size, n, m);
-            auto elapsed = event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -
-                        event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
-            sum_time += elapsed;
-            sum_error += this_error;   
+        try {
+            for (int i=0; i<4; i++) {
+                cl::NDRange local_sgemm = {32 * mdimc, ndimc, 1};
+                cl::NDRange size_sgemm = {32 * m / 16 * mdimc / mwg, n / 16 * ndimc / nwg, size_t(batch_size)};
+    
+                queue.enqueueNDRangeKernel(kernel, cl::NullRange,
+                                           size_sgemm, local_sgemm,
+                                           nullptr, &event);
+                queue.finish();
+                event.wait();
+    
+                queue.enqueueReadBuffer(cBuffer, CL_FALSE, 0,
+                                        c_size * sizeof(half_float::half), c.data());
+                queue.finish();
+                auto this_error = compare_ref(c, c_ref, n, m, batch_size, n, m);
+                auto elapsed = event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -
+                            event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+                sum_time += elapsed;
+                sum_error += this_error;
+            }
+        } catch (...) {
+            sum_error = 10000;
+            sum_time = 0.0f;
         }
 
-        printf("%f %f\n", (double)sum_error / 4, (double) sum_time * 1e-6 / 4);
+        printf("%s %f %f\n", tune_args.c_str(), (double)sum_error / 4, (double) sum_time * 1e-6 / 4);
+    };
+
+    for ( int mdimc = 1; mdimc <= 4; mdimc *= 2) {
+        for (int ndimc = 1; ndimc <= 4; ndimc *= 2) {
+            for ( int mwg = 1; mwg <= 4; mwg *= 2) {
+                for ( int nwg = 1; nwg <= 2; nwg *= 2) {
+                    if(mwg < mdimc) continue;
+                    if(nwg < ndimc) continue;
+                    for (int kwg = 1; kwg < 16; kwg *= 2) {
+                        for(int sa = 0; sa < 2; sa++) {
+                            for(int sb = 0; sb < 2; sb++) {
+                                for(int vwm = 1; vwm <= 8; vwm *= 2) {
+                                    for(int vwn = 1; vwn <= 8; vwn *= 2) {
+                                        if(sa == 0 && vwm != 1) continue;
+                                        if(sb == 0 && vwn != 1) continue;
+                                        try {
+                                            test(mdimc, ndimc, mwg, nwg, kwg, sa, sb, vwm, vwn);
+                                        } catch(...) {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     return 0;
