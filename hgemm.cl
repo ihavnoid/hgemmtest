@@ -50,9 +50,9 @@
 
 void GlobalToLocalA(int tid, int stride, __local short * alm, __global short * agm)
 {
-    const int copy_size = KWG * MWG * 256;
-    const int dest_stride = MWG * 16;
-    const int num_threads = MDIMC * NDIMC * 32;
+    const int copy_size = KWG * MWG;
+    const int dest_stride = MWG;
+    const int num_threads = MDIMC * NDIMC * 32 / 256;
 
     for(int i=tid * VWM; i < copy_size; i += num_threads * VWM) {
         int x = i % dest_stride;
@@ -65,9 +65,9 @@ void GlobalToLocalA(int tid, int stride, __local short * alm, __global short * a
 
 void GlobalToLocalB(int tid, int stride, __local short * blm, __global short * bgm)
 {
-    const int copy_size = KWG * NWG * 256;
-    const int dest_stride = NWG * 16;
-    const int num_threads = MDIMC * NDIMC * 32;
+    const int copy_size = KWG * NWG;
+    const int dest_stride = NWG;
+    const int num_threads = MDIMC * NDIMC * 32 / 256;
     for(int i=tid; i < copy_size; i += num_threads) {
         int x = i % dest_stride;
         int y = i / dest_stride;
@@ -151,18 +151,18 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
         }
     }
 #endif
-    for(kwg = 0; kwg < kSizeK; kwg += 16 * KWG) {
+    for(kwg = 0; kwg < kSizeK; kwg += KWG) {
 #if SA == 1
-        GlobalToLocalA(get_local_id(0) +  get_local_id(1) * 32 * MDIMC, kSizeM,
+        GlobalToLocalA(get_local_id(0) +  get_local_id(1) * 32 * MDIMC / 16, kSizeM,
             alm, 
-            (__global short *)(agm + get_group_id(0) * MWG * 16 + kwg * kSizeM)
+            (__global short *)(agm + get_group_id(0) * MWG + kwg * kSizeM)
         ); 
 #endif
 
 #if SB == 1
         GlobalToLocalB(get_local_id(0) +  get_local_id(1) * 32 * MDIMC, kSizeN,
             blm, 
-            (__global short *)(bgm + get_group_id(1) * NWG * 16 + kwg * kSizeN)
+            (__global short *)(bgm + get_group_id(1) * NWG + kwg * kSizeN)
         ); 
 
 #endif
@@ -172,14 +172,14 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
 #endif
 
 #pragma unroll
-        for(kb = 0; kb < 16 * KWG; kb += 16) {
+        for(kb = 0; kb < KWG; kb += 16) {
 #pragma unroll
             for(mb = 0; mb < MWG / MDIMC; mb += 1) {
 #pragma unroll
                 for(nb = 0; nb < NWG / NDIMC; nb += 1) {
 #if SA == 1
-                    const int block_loc_m = (get_local_id(0)/32) % MDIMC;
-                    const int agm_stride = 16 * MWG;
+                    const int block_loc_m = (get_local_id(0)/32) % (MDIMC/16);
+                    const int agm_stride = MWG;
                     const __local half * b_agm_ = (const __local half *)(alm + (mb + block_loc_m * (MWG/MDIMC)) * 16);
                     const __local half * bb_agm_ = b_agm_ + agm_stride * kb;
 #else
@@ -189,8 +189,8 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
 #endif
 
 #if SB == 1
-                    const int block_loc_n = (get_local_id(1)) % NDIMC;
-                    const int bgm_stride = 16 * NWG;
+                    const int block_loc_n = (get_local_id(1)) % (NDIMC/16);
+                    const int bgm_stride = NWG;
                     const __local half * b_bgm_ = (const __local half *)(blm + (nb + block_loc_n * (NWG/NDIMC)) * 16);
                     const __local half * bb_bgm_ = b_bgm_ + bgm_stride * kb;
 #else
@@ -271,8 +271,8 @@ void HgemmBody(const int kSizeM, const int kSizeN, const int kSizeK,
 #endif
 }
 
-struct alm_t {short alm[KWG * MWG * 256];} __attribute__((aligned(32)));
-struct blm_t {short blm[KWG * NWG * 256];} __attribute__((aligned(32)));
+struct alm_t {short alm[KWG * MWG];} __attribute__((aligned(32)));
+struct blm_t {short blm[KWG * NWG];} __attribute__((aligned(32)));
 
 __kernel void HgemmBatched(const int kSizeM, const int kSizeN, const int kSizeK,
                   const __global half* restrict agm,

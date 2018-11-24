@@ -240,30 +240,27 @@ int main() {
     // Make program of the source code in the context
     cl::Kernel kernel;
 
-    int mdimc = 2;
-    int ndimc = 2;
-    int mwg = 4;
-    int nwg = 2;
-    int kwg = 2;
+    std::string max_option;
+    float min_time = 100000.0;
+    float min_time_error = 0.0; 
 
-    try {
-        m_cl_args += " -DMDIMC="+std::to_string(mdimc);
-        m_cl_args += " -DNDIMC="+std::to_string(ndimc);
-        m_cl_args += " -DMWG="+std::to_string(mwg);
-        m_cl_args += " -DNWG="+std::to_string(nwg);
-        m_cl_args += " -DKWG="+std::to_string(kwg);
-
-        m_program = cl::Program(m_context, sourceCode);
-        m_program.build(m_cl_args.c_str());
-        kernel = cl::Kernel(m_program, "HgemmBatched");
-    } catch (const cl::Error &e) {
-        printf("sourceCode : %s\n", sourceCode.c_str());
-        printf("Error building kernels: %s\n",
-                 m_program.getBuildInfo<CL_PROGRAM_BUILD_LOG>(m_device).c_str());
-        throw std::runtime_error("Error getting OpenCL kernels.");
-    }
-
+    auto test = [&](int mdimc, int ndimc, int mwg, int nwg, int kwg, int sa, int sb, int vwm, int vwn)
     {
+
+        auto args = m_cl_args;
+        auto tune_args = std::string();
+        tune_args += " -DMDIMC="+std::to_string(mdimc);
+        tune_args += " -DNDIMC="+std::to_string(ndimc);
+        tune_args += " -DMWG="+std::to_string(mwg);
+        tune_args += " -DNWG="+std::to_string(nwg);
+        tune_args += " -DKWG="+std::to_string(kwg);
+        tune_args += " -DSA="+std::to_string(sa);
+        tune_args += " -DSB="+std::to_string(sb);
+        tune_args += " -DVWM="+std::to_string(vwm);
+        tune_args += " -DVWN="+std::to_string(vwn);
+    
+        args += tune_args;
+
         int batch_size = 36;
         int m = 256;
         int n = 32;
@@ -312,37 +309,79 @@ int main() {
                                  b_size * sizeof(half_float::half), b.data());
         queue.finish();
 
-        kernel.setArg(0, m);
-        kernel.setArg(1, n);
-        kernel.setArg(2, k);
-        kernel.setArg(3, aBuffer);
-        kernel.setArg(4, bBuffer);
-        kernel.setArg(5, cBuffer);
         auto sum_time = 0.0f;
         auto sum_error = 0.0f;
 
-        for (int i=0; i<4; i++) {
-            cl::NDRange local_sgemm = {(size_t)32 * mdimc, (size_t)ndimc, 1};
-            cl::NDRange size_sgemm = {(size_t)32 * m / 16 * mdimc / mwg, (size_t)n / 16 * ndimc / nwg, size_t(batch_size)};
+        try {
+            m_program = cl::Program(m_context, sourceCode);
+            m_program.build(args.c_str());
 
-            queue.enqueueNDRangeKernel(kernel, cl::NullRange,
-                                       size_sgemm, local_sgemm,
-                                       nullptr, &event);
-            queue.finish();
-            event.wait();
-
-            queue.enqueueReadBuffer(cBuffer, CL_FALSE, 0,
-                                    c_size * sizeof(half_float::half), c.data());
-            queue.finish();
-            auto this_error = compare_ref(c, c_ref, n, m, batch_size, n, m);
-            auto elapsed = event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -
-                        event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
-            sum_time += elapsed;
-            sum_error += this_error;   
+            kernel = cl::Kernel(m_program, "HgemmBatched");
+            kernel.setArg(0, m);
+            kernel.setArg(1, n);
+            kernel.setArg(2, k);
+            kernel.setArg(3, aBuffer);
+            kernel.setArg(4, bBuffer);
+            kernel.setArg(5, cBuffer);
+            for (int i=0; i<4; i++) {
+                cl::NDRange local_sgemm = {32 * mdimc / 16, ndimc / 16, 1};
+                cl::NDRange size_sgemm = {32 * m / 16 * mdimc / mwg, n / 16 * ndimc / nwg, size_t(batch_size)};
+    
+                queue.enqueueNDRangeKernel(kernel, cl::NullRange,
+                                           size_sgemm, local_sgemm,
+                                           nullptr, &event);
+                queue.finish();
+                event.wait();
+    
+                queue.enqueueReadBuffer(cBuffer, CL_FALSE, 0,
+                                        c_size * sizeof(half_float::half), c.data());
+                queue.finish();
+                auto this_error = compare_ref(c, c_ref, n, m, batch_size, n, m);
+                auto elapsed = event.getProfilingInfo<CL_PROFILING_COMMAND_END>() -
+                            event.getProfilingInfo<CL_PROFILING_COMMAND_START>();
+                sum_time += elapsed;
+                sum_error += this_error;
+            }
+        } catch (...) {
+            sum_error = 10000;
+            sum_time = 0.0f;
         }
 
-        printf("%f %f\n", (double)sum_error / 4, (double) sum_time * 1e-6 / 4);
+        auto time = sum_time * 1e-6 / 4;
+        printf("%s %f %f\n", tune_args.c_str(), (double)sum_error / 4, (double) time);
+        if(min_time > time) {
+            min_time = time;
+            min_time_error = sum_error / 4;
+            max_option = tune_args;
+        }
+    };
+
+    for ( int mdimc = 16; mdimc <= 64; mdimc *= 2) {
+        for (int ndimc = 16; ndimc <= 32; ndimc *= 2) {
+            for ( int mwg = 16; mwg <= 64; mwg *= 2) {
+                for ( int nwg = 16; nwg <= 32; nwg *= 2) {
+                    if(mwg < mdimc) continue;
+                    if(nwg < ndimc) continue;
+                    for (int kwg = 16; kwg < 64; kwg *= 2) {
+                        for(int sa = 0; sa < 2; sa++) {
+                            for(int sb = 0; sb < 2; sb++) {
+                                for(int vwm = 1; vwm <= 8; vwm *= 2) {
+                                    for(int vwn = 1; vwn <= 8; vwn *= 2) {
+                                        if(sa == 0 && vwm != 1) continue;
+                                        if(sb == 0 && vwn != 1) continue;
+                                        try {
+                                            test(mdimc, ndimc, mwg, nwg, kwg, sa, sb, vwm, vwn);
+                                        } catch(...) {}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
+    printf("\n\nWinner : %s %f %f\n", max_option.c_str(), (double)min_time_error, (double) min_time);
 
     return 0;
 }
