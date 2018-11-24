@@ -324,8 +324,8 @@ int main() {
             kernel.setArg(4, bBuffer);
             kernel.setArg(5, cBuffer);
             for (int i=0; i<4; i++) {
-                cl::NDRange local_sgemm = {32 * mdimc / 16, ndimc / 16, 1};
-                cl::NDRange size_sgemm = {32 * m / 16 * mdimc / mwg, n / 16 * ndimc / nwg, size_t(batch_size)};
+                cl::NDRange local_sgemm = {size_t(32 * mdimc / 16), size_t(ndimc / 16), 1};
+                cl::NDRange size_sgemm = {size_t(32 * m / 16 * mdimc / mwg), size_t(n / 16 * ndimc / nwg), size_t(batch_size)};
     
                 queue.enqueueNDRangeKernel(kernel, cl::NullRange,
                                            size_sgemm, local_sgemm,
